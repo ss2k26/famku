@@ -150,7 +150,7 @@ const pw = "correct horse battery"
 
 func (c *client) register(email string) {
 	c.t.Helper()
-	resp, m := c.do("POST", "/api/auth/register", map[string]any{"name": "Ana", "email": email, "password": pw, "captcha": c.a.solve()}, nil)
+	resp, m := c.do("POST", "/api/auth/register", map[string]any{"name": "Ana", "username": "ana", "email": email, "password": pw, "captcha": c.a.solve()}, nil)
 	if resp.StatusCode != 202 {
 		c.t.Fatalf("register: %d %v", resp.StatusCode, m)
 	}
@@ -446,5 +446,32 @@ func TestClientIPOnlyTrustedFromProxies(t *testing.T) {
 	}
 	if last.StatusCode != 429 {
 		t.Fatalf("spoofed X-Forwarded-For bypassed the limiter: %d", last.StatusCode)
+	}
+}
+
+func TestLoginByUsernameOrEmailOverHTTP(t *testing.T) {
+	a := newApp(t, nil)
+	c := a.client(t)
+	c.register("ana@example.com")
+	for _, body := range []map[string]any{
+		{"identifier": "ana", "password": pw},
+		{"identifier": "ANA@example.com", "password": pw},
+		{"email": "ana", "password": pw}, // older clients send the identifier in "email"
+	} {
+		resp, m := c.do("POST", "/api/auth/login", body, nil)
+		if resp.StatusCode != 200 {
+			t.Fatalf("login %v: %d %v", body["identifier"], resp.StatusCode, m)
+		}
+		if got := m["user"].(map[string]any)["username"]; got != "ana" {
+			t.Fatalf("username in response = %v", got)
+		}
+	}
+	// a duplicate username is a field error on registration
+	resp, m := c.do("POST", "/api/auth/register", map[string]any{"name": "Eve", "username": "Ana", "email": "eve@example.com", "password": pw, "captcha": a.solve()}, nil)
+	if resp.StatusCode != 400 && resp.StatusCode != 422 {
+		t.Fatalf("duplicate username: %d %v", resp.StatusCode, m)
+	}
+	if f, _ := m["error"].(map[string]any)["fields"].(map[string]any); f["username"] == nil {
+		t.Fatalf("expected a username field error: %v", m)
 	}
 }

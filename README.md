@@ -3,7 +3,7 @@
 Go API + Svelte 5 SPA with account security built in. Lives in `htdocs/famku` of the platform.
 
 ## Features
-- **Login**: Argon2id (+ optional pepper), opaque server-side sessions (`__Host-` cookie, HttpOnly, Secure), idle + absolute timeouts, session list / revoke.
+- **Login**: sign in with **username or email**; usernames are unique, case-insensitive (3-30 chars: a-z 0-9 . _ -), changeable in the profile. Argon2id (+ optional pepper), opaque server-side sessions (`__Host-` cookie, HttpOnly, Secure), idle + absolute timeouts, session list / revoke.
 - **Account lockout & rate limiting**: per-IP token buckets (global + stricter on auth routes), failed-login counters with captcha escalation then lock.
 - **Captcha**: built-in proof-of-work (no third party, no tracking) or Cloudflare Turnstile / hCaptcha / reCAPTCHA. Modes: `off`, `adaptive`, `always`.
 - **2FA**: TOTP (RFC 6238, replay-protected) + 10 single-use recovery codes.
@@ -29,7 +29,7 @@ cp stacks/apps/famku/app.env.example stacks/apps/famku/app.env   # edit secrets
 cp stacks/apps/famku/.env.dev.example stacks/apps/famku/.env      # or the prod one
 bin/platform build-app famku && bin/platform up famku
 # first user (no e-mail needed): put FAMKU_PASSWORD=... in app.env, restart, then
-bin/platform exec famku app /server -create-user -email you@example.com -name You
+bin/platform exec famku app /server -create-user -email you@example.com -name You -username you
 # afterwards remove FAMKU_PASSWORD from app.env
 ```
 Migrations run on start (`AUTO_MIGRATE=true`, guarded by a DB advisory lock).
@@ -45,6 +45,8 @@ cd frontend && npm install && npm run dev                                       
 `SPA_MODE=embedded` (default, one binary) · `dir` (files in `data/spa/famku`) · `external` (CDN / web hosting; set `CORS_ALLOWED_ORIGINS`, `COOKIE_SAMESITE`, and publish `/config.json` with `{"apiUrl":"https://api.example.com"}` next to the built SPA, or build with `VITE_API_URL`). The `__Host-` cookie requires HTTPS and no Domain, so keep the SPA and API on the same site where possible.
 
 ## Notes
+- Upgrading an existing database: migration `0002_username.sql` runs on start and gives current users a placeholder username (`user` + 10 characters of their id). They can change it in the profile, or set it yourself with `UPDATE users SET username='...' WHERE email='...'`.
+- Failed-login counters follow the account, so alternating between username and email does not give extra attempts.
 - Captcha tokens are single use; the UI re-solves after each submit.
 - 2FA setup shows the secret and an `otpauth://` link (no QR image).
 - Commit `backend/go.sum` and `frontend/package-lock.json` after the first successful build.

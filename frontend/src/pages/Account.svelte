@@ -21,7 +21,7 @@
   <header class="flex items-center justify-between py-4">
     <div>
       <p class="text-lg font-semibold tracking-tight">famku</p>
-      <p class="text-sm text-muted-foreground">{auth.user?.email}</p>
+      <p class="text-sm text-muted-foreground">{auth.user?.username} · {auth.user?.email}</p>
     </div>
     <div class="flex items-center gap-2">
       <ThemeToggle />

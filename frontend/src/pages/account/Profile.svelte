@@ -8,6 +8,7 @@
   import * as Alert from '$lib/components/ui/alert';
 
   let name = $state(auth.user?.name ?? '');
+  let username = $state(auth.user?.username ?? '');
   let error = $state('');
   let ok = $state(false);
   let fields = $state<Record<string, string>>({});
@@ -20,7 +21,8 @@
     fields = {};
     busy = true;
     try {
-      const r = await api<{ user: User }>('PATCH', '/api/account/profile', { name });
+      const r = await api<{ user: User }>('PATCH', '/api/account/profile', { name, username });
+      username = r.user.username;
       auth.user = r.user;
       ok = true;
     } catch (err) {
@@ -40,6 +42,9 @@
       {#if ok}<Alert.Root variant="success"><Alert.Description>Saved.</Alert.Description></Alert.Root>{/if}
       <Field id="pname" label="Name" error={fields.name}>
         <Input id="pname" required maxlength={80} bind:value={name} />
+      </Field>
+      <Field id="puser" label="Username" error={fields.username} hint="Used to sign in, together with your email.">
+        <Input id="puser" autocapitalize="none" spellcheck="false" required minlength={3} maxlength={30} bind:value={username} />
       </Field>
       <div><Button type="submit" disabled={busy}>Save</Button></div>
     </form>

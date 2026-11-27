@@ -10,7 +10,7 @@
   import { Input } from '$lib/components/ui/input';
   import * as Alert from '$lib/components/ui/alert';
 
-  let email = $state('');
+  let identifier = $state('');
   let password = $state('');
   let totp = $state('');
   let recovery = $state('');
@@ -32,7 +32,7 @@
     busy = true;
     try {
       const r = await api<{ user: User; csrfToken: string }>('POST', '/api/auth/login', {
-        email,
+        identifier: identifier.trim(),
         password,
         captcha: captchaToken,
         totpCode: needTwoFactor && !useRecovery ? totp.trim() : '',
@@ -69,8 +69,8 @@
     {/if}
 
     {#if !needTwoFactor}
-      <Field id="email" label="Email">
-        <Input id="email" type="email" autocomplete="username" required bind:value={email} />
+      <Field id="identifier" label="Username or email">
+        <Input id="identifier" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength={254} bind:value={identifier} />
       </Field>
       <Field id="password" label="Password">
         <Input id="password" type="password" autocomplete="current-password" required bind:value={password} />

@@ -12,9 +12,10 @@ import (
 // ---- persistence ports -------------------------------------------------------------------------
 
 type UserRepository interface {
-	Create(ctx context.Context, u *domain.User) error // domain.ErrConflict when the email exists
+	Create(ctx context.Context, u *domain.User) error // domain.ErrConflict when the email or username exists
 	ByID(ctx context.Context, id string) (*domain.User, error)
 	ByEmail(ctx context.Context, email string) (*domain.User, error)
+	ByUsername(ctx context.Context, username string) (*domain.User, error)
 	Update(ctx context.Context, u *domain.User) error
 }
 

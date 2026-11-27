@@ -11,6 +11,7 @@ import (
 type userDTO struct {
 	ID               string    `json:"id"`
 	Email            string    `json:"email"`
+	Username         string    `json:"username"`
 	Name             string    `json:"name"`
 	EmailVerified    bool      `json:"emailVerified"`
 	TwoFactorEnabled bool      `json:"twoFactorEnabled"`
@@ -18,18 +19,18 @@ type userDTO struct {
 }
 
 func toUserDTO(u *domain.User) userDTO {
-	return userDTO{ID: u.ID, Email: u.Email, Name: u.Name, EmailVerified: u.EmailVerified(), TwoFactorEnabled: u.TOTPEnabled, CreatedAt: u.CreatedAt}
+	return userDTO{ID: u.ID, Email: u.Email, Username: u.Username, Name: u.Name, EmailVerified: u.EmailVerified(), TwoFactorEnabled: u.TOTPEnabled, CreatedAt: u.CreatedAt}
 }
 
 func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name, Email, Password string
-		Captcha               string `json:"captcha"`
+		Name, Username, Email, Password string
+		Captcha                         string `json:"captcha"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
-	_, err := s.Auth.Register(r.Context(), usecase.RegisterInput{Name: in.Name, Email: in.Email, Password: in.Password, CaptchaToken: in.Captcha, Meta: meta(r)})
+	_, err := s.Auth.Register(r.Context(), usecase.RegisterInput{Name: in.Name, Username: in.Username, Email: in.Email, Password: in.Password, CaptchaToken: in.Captcha, Meta: meta(r)})
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -40,10 +41,12 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Email, Password string
-		Captcha         string `json:"captcha"`
-		TOTPCode        string `json:"totpCode"`
-		RecoveryCode    string `json:"recoveryCode"`
+		Identifier   string `json:"identifier"` // email or username
+		Email        string `json:"email"`      // older clients: same meaning as identifier
+		Password     string
+		Captcha      string `json:"captcha"`
+		TOTPCode     string `json:"totpCode"`
+		RecoveryCode string `json:"recoveryCode"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -52,7 +55,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, domain.ErrInvalidCredentials)
 		return
 	}
-	res, err := s.Auth.Login(r.Context(), usecase.LoginInput{Email: in.Email, Password: in.Password, CaptchaToken: in.Captcha,
+	res, err := s.Auth.Login(r.Context(), usecase.LoginInput{Identifier: firstNonEmpty(in.Identifier, in.Email), Password: in.Password, CaptchaToken: in.Captcha,
 		TOTPCode: in.TOTPCode, RecoveryCode: in.RecoveryCode, Meta: meta(r)})
 	if err != nil {
 		s.fail(w, r, err)
@@ -129,4 +132,11 @@ func (s *Server) resendVerification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "ok"})
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }

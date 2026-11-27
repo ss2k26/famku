@@ -6,11 +6,11 @@ import (
 )
 
 func (s *Server) updateProfile(w http.ResponseWriter, r *http.Request) {
-	var in struct{ Name string }
+	var in struct{ Name, Username string }
 	if !decode(w, r, &in) {
 		return
 	}
-	u, err := s.Auth.UpdateProfile(r.Context(), authOf(r.Context()).user.ID, in.Name)
+	u, err := s.Auth.UpdateProfile(r.Context(), authOf(r.Context()).user.ID, in.Name, in.Username)
 	if err != nil {
 		s.fail(w, r, err)
 		return

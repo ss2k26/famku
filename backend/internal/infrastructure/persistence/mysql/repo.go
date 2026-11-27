@@ -37,12 +37,12 @@ func nullTime(t *time.Time) any {
 
 type Users struct{ db *sql.DB }
 
-const userCols = "id, email, name, password_hash, email_verified_at, totp_secret, totp_enabled, totp_last_step, created_at, updated_at"
+const userCols = "id, email, username, name, password_hash, email_verified_at, totp_secret, totp_enabled, totp_last_step, created_at, updated_at"
 
 func scanUser(row interface{ Scan(...any) error }) (*domain.User, error) {
 	var u domain.User
 	var verified sql.NullTime
-	if err := row.Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &verified, &u.TOTPSecret, &u.TOTPEnabled, &u.TOTPLastStep, &u.CreatedAt, &u.UpdatedAt); err != nil {
+	if err := row.Scan(&u.ID, &u.Email, &u.Username, &u.Name, &u.PasswordHash, &verified, &u.TOTPSecret, &u.TOTPEnabled, &u.TOTPLastStep, &u.CreatedAt, &u.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, domain.ErrNotFound
 		}
@@ -56,8 +56,8 @@ func scanUser(row interface{ Scan(...any) error }) (*domain.User, error) {
 }
 
 func (r Users) Create(ctx context.Context, u *domain.User) error {
-	_, err := r.db.ExecContext(ctx, `INSERT INTO users (`+userCols+`) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		u.ID, u.Email, u.Name, u.PasswordHash, nullTime(u.EmailVerifiedAt), u.TOTPSecret, u.TOTPEnabled, u.TOTPLastStep, u.CreatedAt.UTC(), u.UpdatedAt.UTC())
+	_, err := r.db.ExecContext(ctx, `INSERT INTO users (`+userCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		u.ID, u.Email, u.Username, u.Name, u.PasswordHash, nullTime(u.EmailVerifiedAt), u.TOTPSecret, u.TOTPEnabled, u.TOTPLastStep, u.CreatedAt.UTC(), u.UpdatedAt.UTC())
 	if isDuplicate(err) {
 		return domain.ErrConflict
 	}
@@ -72,9 +72,16 @@ func (r Users) ByEmail(ctx context.Context, email string) (*domain.User, error) 
 	return scanUser(r.db.QueryRowContext(ctx, `SELECT `+userCols+` FROM users WHERE email = ?`, email))
 }
 
+func (r Users) ByUsername(ctx context.Context, username string) (*domain.User, error) {
+	return scanUser(r.db.QueryRowContext(ctx, `SELECT `+userCols+` FROM users WHERE username = ?`, username))
+}
+
 func (r Users) Update(ctx context.Context, u *domain.User) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE users SET name=?, password_hash=?, email_verified_at=?, totp_secret=?, totp_enabled=?, totp_last_step=?, updated_at=? WHERE id=?`,
-		u.Name, u.PasswordHash, nullTime(u.EmailVerifiedAt), u.TOTPSecret, u.TOTPEnabled, u.TOTPLastStep, u.UpdatedAt.UTC(), u.ID)
+	_, err := r.db.ExecContext(ctx, `UPDATE users SET username=?, name=?, password_hash=?, email_verified_at=?, totp_secret=?, totp_enabled=?, totp_last_step=?, updated_at=? WHERE id=?`,
+		u.Username, u.Name, u.PasswordHash, nullTime(u.EmailVerifiedAt), u.TOTPSecret, u.TOTPEnabled, u.TOTPLastStep, u.UpdatedAt.UTC(), u.ID)
+	if isDuplicate(err) {
+		return domain.ErrConflict
+	}
 	return err
 }
 

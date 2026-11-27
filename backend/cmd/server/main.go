@@ -3,7 +3,7 @@
 //	server                       run the API (+ SPA depending on SPA_MODE)
 //	server -healthcheck          probe /healthz and exit 0/1 (container HEALTHCHECK)
 //	server -migrate              apply database migrations and exit
-//	server -create-user          create a verified user (reads FAMKU_PASSWORD, -email, -name); works with REGISTRATION_OPEN=false
+//	server -create-user          create a verified user (reads FAMKU_PASSWORD, -email, -name, -username); works with REGISTRATION_OPEN=false
 package main
 
 import (
@@ -48,6 +48,7 @@ func main() {
 	createUser := flag.Bool("create-user", false, "create a verified user (password from FAMKU_PASSWORD)")
 	email := flag.String("email", "", "with -create-user")
 	name := flag.String("name", "", "with -create-user")
+	username := flag.String("username", "", "with -create-user (default: derived from the email)")
 	flag.Parse()
 
 	if *healthcheck {
@@ -113,12 +114,12 @@ func main() {
 
 	if *createUser {
 		pw := os.Getenv("FAMKU_PASSWORD")
-		u, err := auth.CreateVerifiedUser(ctx, *name, *email, pw)
+		u, err := auth.CreateVerifiedUser(ctx, *name, *username, *email, pw)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "create-user:", err)
 			os.Exit(1)
 		}
-		fmt.Println("created user", u.Email)
+		fmt.Println("created user", u.Username, u.Email)
 		return
 	}
 

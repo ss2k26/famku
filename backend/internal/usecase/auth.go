@@ -70,14 +70,15 @@ func NewAuth(d Deps, cfg AuthConfig) *Auth {
 // ---- inputs / results --------------------------------------------------------------------------
 
 type RegisterInput struct {
-	Name, Email, Password, CaptchaToken string
-	Meta                                ClientMeta
+	Name, Username, Email, Password, CaptchaToken string
+	Meta                                          ClientMeta
 }
 
 type LoginInput struct {
-	Email, Password, CaptchaToken string
-	TOTPCode, RecoveryCode        string
-	Meta                          ClientMeta
+	Identifier             string // email or username
+	Password, CaptchaToken string
+	TOTPCode, RecoveryCode string
+	Meta                   ClientMeta
 }
 
 type LoginResult struct {
@@ -102,9 +103,20 @@ func (s *Auth) Register(ctx context.Context, in RegisterInput) (*domain.User, er
 	if err != nil {
 		fields["name"] = err.Error()
 	}
+	username, err := domain.ValidateNewUsername(in.Username)
+	if err != nil {
+		fields["username"] = err.Error()
+	}
 	email, err := domain.NormalizeEmail(in.Email)
 	if err != nil {
 		fields["email"] = err.Error()
+	}
+	if _, ok := fields["username"]; !ok {
+		if _, err := s.Users.ByUsername(ctx, username); err == nil {
+			fields["username"] = "this username is already taken"
+		} else if !errors.Is(err, domain.ErrNotFound) {
+			return nil, err
+		}
 	}
 	if len(fields) == 0 {
 		if perr := ValidatePassword(in.Password, email, name); perr != nil {
@@ -122,8 +134,14 @@ func (s *Auth) Register(ctx context.Context, in RegisterInput) (*domain.User, er
 		return nil, err
 	}
 	now := s.Clock.Now()
-	u := &domain.User{ID: s.Crypto.NewID(), Email: email, Name: name, PasswordHash: hash, CreatedAt: now, UpdatedAt: now}
+	u := &domain.User{ID: s.Crypto.NewID(), Email: email, Username: username, Name: name, PasswordHash: hash, CreatedAt: now, UpdatedAt: now}
 	if err := s.Users.Create(ctx, u); err != nil {
+		if errors.Is(err, domain.ErrConflict) {
+			// lost a race for the username, or the email exists: only the username may be reported
+			if _, uerr := s.Users.ByUsername(ctx, username); uerr == nil {
+				return nil, &domain.ValidationError{Fields: map[string]string{"username": "this username is already taken"}}
+			}
+		}
 		if errors.Is(err, domain.ErrConflict) && s.Cfg.RequireVerifiedEmail {
 			return nil, nil // same answer as success
 		}
@@ -139,11 +157,13 @@ func (s *Auth) Register(ctx context.Context, in RegisterInput) (*domain.User, er
 // ---- login -------------------------------------------------------------------------------------
 
 func (s *Auth) Login(ctx context.Context, in LoginInput) (*LoginResult, error) {
-	email, emailErr := domain.NormalizeEmail(in.Email)
-	acctKey, ipKey := "login:acct:"+email, "login:ip:"+in.Meta.IP
-	if emailErr != nil {
-		acctKey = "login:acct:invalid"
+	// Resolve the account first so the counters follow the account, not the spelling used to sign in
+	// (email and username must not give an attacker two separate budgets).
+	u, key, err := s.findByIdentifier(ctx, in.Identifier)
+	if err != nil {
+		return nil, err
 	}
+	acctKey, ipKey := "login:acct:"+key, "login:ip:"+in.Meta.IP
 	fa, resetA := s.Attempts.Failures(acctKey)
 	fi, _ := s.Attempts.Failures(ipKey)
 
@@ -162,14 +182,6 @@ func (s *Auth) Login(ctx context.Context, in LoginInput) (*LoginResult, error) {
 		s.audit(ctx, userID, ActLoginFail, in.Meta, detail)
 	}
 
-	var u *domain.User
-	if emailErr == nil {
-		var err error
-		u, err = s.Users.ByEmail(ctx, email)
-		if err != nil && !errors.Is(err, domain.ErrNotFound) {
-			return nil, err
-		}
-	}
 	if u == nil {
 		s.Hasher.Dummy(in.Password) // same cost as a real check: no timing oracle
 		fail("", "unknown account")
@@ -235,6 +247,34 @@ func (s *Auth) Login(ctx context.Context, in LoginInput) (*LoginResult, error) {
 	return &LoginResult{User: u, Session: sess, Token: token}, nil
 }
 
+// findByIdentifier looks an account up by email (identifier contains "@") or by username. It returns a stable key for
+// the attempt counters: the user id when found, otherwise the normalised identifier. A malformed identifier is
+// "not found", never a distinguishable error.
+func (s *Auth) findByIdentifier(ctx context.Context, raw string) (*domain.User, string, error) {
+	var (
+		u    *domain.User
+		key  = "invalid"
+		err  error
+		norm string
+	)
+	if strings.Contains(raw, "@") {
+		if norm, err = domain.NormalizeEmail(raw); err == nil {
+			key = "e:" + norm
+			u, err = s.Users.ByEmail(ctx, norm)
+		}
+	} else if norm, err = domain.NormalizeUsername(raw); err == nil {
+		key = "u:" + norm
+		u, err = s.Users.ByUsername(ctx, norm)
+	}
+	if err != nil && !errors.Is(err, domain.ErrNotFound) && key != "invalid" {
+		return nil, "", err
+	}
+	if u != nil {
+		key = "id:" + u.ID
+	}
+	return u, key, nil
+}
+
 // Authenticate resolves a session cookie. Idle and absolute timeouts are enforced here.
 func (s *Auth) Authenticate(ctx context.Context, rawToken string) (*domain.User, *domain.Session, error) {
 	if rawToken == "" {
@@ -297,7 +337,8 @@ func (s *Auth) LogoutOthers(ctx context.Context, userID, keepID string) error {
 
 // ---- account -----------------------------------------------------------------------------------
 
-func (s *Auth) UpdateProfile(ctx context.Context, userID, rawName string) (*domain.User, error) {
+// UpdateProfile changes the display name and, when rawUsername is not empty, the username.
+func (s *Auth) UpdateProfile(ctx context.Context, userID, rawName, rawUsername string) (*domain.User, error) {
 	name, err := domain.ValidateName(rawName)
 	if err != nil {
 		return nil, &domain.ValidationError{Fields: map[string]string{"name": err.Error()}}
@@ -306,8 +347,31 @@ func (s *Auth) UpdateProfile(ctx context.Context, userID, rawName string) (*doma
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(rawUsername) != "" {
+		un, err := domain.NormalizeUsername(rawUsername)
+		if err == nil && un != u.Username { // keeping the current name is always allowed, even if it is now "reserved"
+			un, err = domain.ValidateNewUsername(rawUsername)
+		}
+		if err != nil {
+			return nil, &domain.ValidationError{Fields: map[string]string{"username": err.Error()}}
+		}
+		if un != u.Username {
+			if other, gerr := s.Users.ByUsername(ctx, un); gerr == nil && other.ID != u.ID {
+				return nil, &domain.ValidationError{Fields: map[string]string{"username": "this username is already taken"}}
+			} else if gerr != nil && !errors.Is(gerr, domain.ErrNotFound) {
+				return nil, gerr
+			}
+			u.Username = un
+		}
+	}
 	u.Name, u.UpdatedAt = name, s.Clock.Now()
-	return u, s.Users.Update(ctx, u)
+	if err := s.Users.Update(ctx, u); err != nil {
+		if errors.Is(err, domain.ErrConflict) {
+			return nil, &domain.ValidationError{Fields: map[string]string{"username": "this username is already taken"}}
+		}
+		return nil, err
+	}
+	return u, nil
 }
 
 func (s *Auth) ChangePassword(ctx context.Context, userID, keepSessionID, current, next string, meta ClientMeta) error {
@@ -617,7 +681,7 @@ func clip(s string, n int) string {
 }
 
 // CreateVerifiedUser is the administrative path (CLI): no registration switch, no captcha, e-mail already trusted.
-func (s *Auth) CreateVerifiedUser(ctx context.Context, name, rawEmail, password string) (*domain.User, error) {
+func (s *Auth) CreateVerifiedUser(ctx context.Context, name, rawUsername, rawEmail, password string) (*domain.User, error) {
 	n, err := domain.ValidateName(name)
 	if err != nil {
 		return nil, &domain.ValidationError{Fields: map[string]string{"name": err.Error()}}
@@ -625,6 +689,13 @@ func (s *Auth) CreateVerifiedUser(ctx context.Context, name, rawEmail, password 
 	email, err := domain.NormalizeEmail(rawEmail)
 	if err != nil {
 		return nil, &domain.ValidationError{Fields: map[string]string{"email": err.Error()}}
+	}
+	if strings.TrimSpace(rawUsername) == "" {
+		rawUsername = domain.SuggestUsername(email)
+	}
+	username, err := domain.ValidateNewUsername(rawUsername)
+	if err != nil {
+		return nil, &domain.ValidationError{Fields: map[string]string{"username": err.Error()}}
 	}
 	if err := ValidatePassword(password, email, n); err != nil {
 		return nil, err
@@ -634,6 +705,6 @@ func (s *Auth) CreateVerifiedUser(ctx context.Context, name, rawEmail, password 
 		return nil, err
 	}
 	now := s.Clock.Now()
-	u := &domain.User{ID: s.Crypto.NewID(), Email: email, Name: n, PasswordHash: hash, EmailVerifiedAt: &now, CreatedAt: now, UpdatedAt: now}
+	u := &domain.User{ID: s.Crypto.NewID(), Email: email, Username: username, Name: n, PasswordHash: hash, EmailVerifiedAt: &now, CreatedAt: now, UpdatedAt: now}
 	return u, s.Users.Create(ctx, u)
 }

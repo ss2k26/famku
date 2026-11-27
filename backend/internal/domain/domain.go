@@ -38,6 +38,7 @@ func (e *ValidationError) Error() string { return "validation failed" }
 type User struct {
 	ID              string
 	Email           string // normalised (lower-case, trimmed)
+	Username        string // normalised (lower-case); unique; usable instead of the email to sign in
 	Name            string
 	PasswordHash    string
 	EmailVerifiedAt *time.Time
@@ -112,6 +113,61 @@ func NormalizeEmail(raw string) (string, error) {
 		return "", errors.New("enter a valid email address")
 	}
 	return s, nil
+}
+
+var reservedUsernames = map[string]struct{}{}
+
+func init() {
+	for _, n := range strings.Fields(`admin administrator root system support help security staff moderator mod owner api www mail
+		postmaster webmaster hostmaster abuse noreply no-reply null undefined anonymous me you famku login logout register signup
+		signin signout account settings`) {
+		reservedUsernames[n] = struct{}{}
+	}
+}
+
+// NormalizeUsername lower-cases and trims, and checks the format: 3-30 characters from a-z 0-9 . _ -, starting and
+// ending with a letter or digit. "@" is not allowed, so a sign-in identifier is unambiguously an email or a username.
+func NormalizeUsername(raw string) (string, error) {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	if len(s) < 3 || len(s) > 30 {
+		return "", errors.New("username must be 3-30 characters")
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		alnum := c >= 'a' && c <= 'z' || c >= '0' && c <= '9'
+		if !alnum && c != '.' && c != '_' && c != '-' {
+			return "", errors.New("use only letters, numbers, dots, underscores and hyphens")
+		}
+		if !alnum && (i == 0 || i == len(s)-1) {
+			return "", errors.New("username must start and end with a letter or number")
+		}
+	}
+	return s, nil
+}
+
+// ValidateNewUsername is NormalizeUsername plus the reserved-word list (applied to new names only, never at sign-in).
+func ValidateNewUsername(raw string) (string, error) {
+	s, err := NormalizeUsername(raw)
+	if err != nil {
+		return "", err
+	}
+	if _, bad := reservedUsernames[s]; bad {
+		return "", errors.New("this username is not available")
+	}
+	return s, nil
+}
+
+// SuggestUsername derives a valid username from an email address (administrative CLI only).
+func SuggestUsername(email string) string {
+	local := strings.SplitN(strings.ToLower(email), "@", 2)[0]
+	b := make([]byte, 0, len(local))
+	for i := 0; i < len(local) && len(b) < 30; i++ {
+		c := local[i]
+		if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-' {
+			b = append(b, c)
+		}
+	}
+	return strings.Trim(string(b), "._-")
 }
 
 func ValidateName(raw string) (string, error) {

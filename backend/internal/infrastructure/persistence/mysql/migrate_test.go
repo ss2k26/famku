@@ -29,6 +29,18 @@ func TestEmbeddedMigrationsSplitCleanly(t *testing.T) {
 	}
 }
 
+func TestUsernameMigrationSplitsCleanly(t *testing.T) {
+	raw, err := migrationFS.ReadFile("migrations/0002_username.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmts := splitStatements(string(raw))
+	if len(stmts) != 3 || !strings.HasPrefix(stmts[0], "ALTER TABLE users ADD COLUMN username") ||
+		!strings.HasPrefix(stmts[1], "UPDATE users") || !strings.Contains(stmts[2], "uq_users_username") {
+		t.Fatalf("unexpected statements: %q", stmts)
+	}
+}
+
 func TestDuplicateDetection(t *testing.T) {
 	if !isDuplicate(errString("Error 1062 (23000): Duplicate entry 'x' for key 'uq_users_email'")) || isDuplicate(nil) {
 		t.Fatal("duplicate detection broken")

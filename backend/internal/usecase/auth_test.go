@@ -103,7 +103,7 @@ const goodPW = "correct horse battery"
 
 func (e *env) register(t *testing.T, email string) *domain.User {
 	t.Helper()
-	u, err := e.a.Register(context.Background(), usecase.RegisterInput{Name: "Ana", Email: email, Password: goodPW, CaptchaToken: "human", Meta: meta})
+	u, err := e.a.Register(context.Background(), usecase.RegisterInput{Name: "Ana", Username: strings.ReplaceAll(email, "@", "-"), Email: email, Password: goodPW, CaptchaToken: "human", Meta: meta})
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -111,7 +111,7 @@ func (e *env) register(t *testing.T, email string) *domain.User {
 }
 
 func (e *env) login(email, pw string, extra ...func(*usecase.LoginInput)) (*usecase.LoginResult, error) {
-	in := usecase.LoginInput{Email: email, Password: pw, Meta: meta}
+	in := usecase.LoginInput{Identifier: email, Password: pw, Meta: meta}
 	for _, f := range extra {
 		f(&in)
 	}
@@ -123,10 +123,10 @@ func (e *env) login(email, pw string, extra ...func(*usecase.LoginInput)) (*usec
 func TestRegisterValidationAndCaptcha(t *testing.T) {
 	e := setup(t, nil)
 	ctx := context.Background()
-	if _, err := e.a.Register(ctx, usecase.RegisterInput{Name: "Ana", Email: "a@x.io", Password: goodPW, Meta: meta}); !errors.Is(err, domain.ErrCaptchaRequired) {
+	if _, err := e.a.Register(ctx, usecase.RegisterInput{Name: "Ana", Username: "ana", Email: "a@x.io", Password: goodPW, Meta: meta}); !errors.Is(err, domain.ErrCaptchaRequired) {
 		t.Fatalf("missing captcha: %v", err)
 	}
-	if _, err := e.a.Register(ctx, usecase.RegisterInput{Name: "Ana", Email: "a@x.io", Password: goodPW, CaptchaToken: "bot", Meta: meta}); !errors.Is(err, domain.ErrCaptchaFailed) {
+	if _, err := e.a.Register(ctx, usecase.RegisterInput{Name: "Ana", Username: "ana", Email: "a@x.io", Password: goodPW, CaptchaToken: "bot", Meta: meta}); !errors.Is(err, domain.ErrCaptchaFailed) {
 		t.Fatalf("bad captcha: %v", err)
 	}
 	_, err := e.a.Register(ctx, usecase.RegisterInput{Name: "", Email: "not-an-email", Password: "short", CaptchaToken: "human", Meta: meta})
@@ -134,12 +134,12 @@ func TestRegisterValidationAndCaptcha(t *testing.T) {
 	if !errors.As(err, &ve) || ve.Fields["name"] == "" || ve.Fields["email"] == "" {
 		t.Fatalf("expected field errors, got %v", err)
 	}
-	_, err = e.a.Register(ctx, usecase.RegisterInput{Name: "Ana", Email: "ana@x.io", Password: "password1234", CaptchaToken: "human", Meta: meta})
+	_, err = e.a.Register(ctx, usecase.RegisterInput{Name: "Ana", Username: "ana", Email: "ana@x.io", Password: "password1234", CaptchaToken: "human", Meta: meta})
 	if !errors.As(err, &ve) || ve.Fields["password"] == "" {
 		t.Fatalf("common password accepted: %v", err)
 	}
 	e.register(t, "Ana@X.io")
-	if _, err := e.a.Register(ctx, usecase.RegisterInput{Name: "Ana", Email: "ana@x.io", Password: goodPW, CaptchaToken: "human", Meta: meta}); !errors.Is(err, domain.ErrConflict) {
+	if _, err := e.a.Register(ctx, usecase.RegisterInput{Name: "Ana", Username: "ana", Email: "ana@x.io", Password: goodPW, CaptchaToken: "human", Meta: meta}); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("duplicate: %v", err)
 	}
 }
@@ -151,7 +151,7 @@ func TestRegisterClosedAndNoEnumerationWhenVerifying(t *testing.T) {
 	}
 	e = setup(t, func(c *usecase.AuthConfig) { c.RequireVerifiedEmail = true })
 	e.register(t, "ana@x.io")
-	u, err := e.a.Register(context.Background(), usecase.RegisterInput{Name: "Eve", Email: "ana@x.io", Password: goodPW, CaptchaToken: "human", Meta: meta})
+	u, err := e.a.Register(context.Background(), usecase.RegisterInput{Name: "Eve", Username: "eve", Email: "ana@x.io", Password: goodPW, CaptchaToken: "human", Meta: meta})
 	if u != nil || err != nil {
 		t.Fatalf("existing address must look like success, got %v %v", u, err)
 	}
@@ -413,5 +413,106 @@ func TestAuditTrailHasNoSecrets(t *testing.T) {
 	}
 	if strings.Join(actions, ",") != "register,login_failed,login_ok" {
 		t.Fatalf("audit actions: %v", actions)
+	}
+}
+
+func TestUsernameRulesAndLoginByEither(t *testing.T) {
+	e := setup(t, nil)
+	ctx := context.Background()
+	reg := func(name, user, email string) error {
+		_, err := e.a.Register(ctx, usecase.RegisterInput{Name: name, Username: user, Email: email, Password: goodPW, CaptchaToken: "human", Meta: meta})
+		return err
+	}
+	fieldOf := func(err error, f string) string {
+		var ve *domain.ValidationError
+		if errors.As(err, &ve) {
+			return ve.Fields[f]
+		}
+		return ""
+	}
+	for _, bad := range []string{"", "ab", "has space", "a@b.co", "-lead", "trail.", "admin", strings.Repeat("x", 31), "bad/char"} {
+		if err := reg("Ana", bad, "n@x.io"); fieldOf(err, "username") == "" {
+			t.Errorf("username %q should be rejected, got %v", bad, err)
+		}
+	}
+	if err := reg("Ana", "Ana.Lee_1", "ana@x.io"); err != nil {
+		t.Fatal(err)
+	}
+	// stored lower-case; taken regardless of case
+	if err := reg("Bob", "ANA.lee_1", "bob@x.io"); fieldOf(err, "username") == "" {
+		t.Fatalf("duplicate username (different case) must be rejected, got %v", err)
+	}
+	// sign in with username (any case), with email, and with email in other case
+	for _, id := range []string{"ana.lee_1", "ANA.Lee_1", "ana@x.io", "Ana@X.io"} {
+		res, err := e.login(id, goodPW)
+		if err != nil {
+			t.Fatalf("login as %q: %v", id, err)
+		}
+		if res.User.Username != "ana.lee_1" {
+			t.Fatalf("username = %q", res.User.Username)
+		}
+	}
+	if _, err := e.login("ana.lee_1", "wrong-password-1"); !errors.Is(err, domain.ErrInvalidCredentials) {
+		t.Fatalf("bad password: %v", err)
+	}
+	for _, id := range []string{"nobody", "nobody@x.io", "", "@@", "a b"} {
+		if _, err := e.login(id, goodPW, func(in *usecase.LoginInput) { in.CaptchaToken = "human" }); !errors.Is(err, domain.ErrInvalidCredentials) {
+			t.Errorf("unknown identifier %q should look like bad credentials, got %v", id, err)
+		}
+	}
+}
+
+func TestFailuresCountPerAccountAcrossIdentifiers(t *testing.T) {
+	e := setup(t, nil)
+	ctx := context.Background()
+	if _, err := e.a.Register(ctx, usecase.RegisterInput{Name: "Ana", Username: "ana", Email: "ana@x.io", Password: goodPW, CaptchaToken: "human", Meta: meta}); err != nil {
+		t.Fatal(err)
+	}
+	human := func(in *usecase.LoginInput) { in.CaptchaToken = "human" }
+	// alternate email / username: the budget is shared, so the account still locks after LockAfterFailures
+	for i := 0; i < 10; i++ {
+		id := "ana"
+		if i%2 == 1 {
+			id = "ana@x.io"
+		}
+		_, _ = e.login(id, "wrong-password-1", human)
+	}
+	var le *domain.LockedError
+	if _, err := e.login("ana", goodPW, human); !errors.As(err, &le) {
+		t.Fatalf("expected a lock-out, got %v", err)
+	}
+	if _, err := e.login("ana@x.io", goodPW, human); !errors.As(err, &le) {
+		t.Fatalf("expected a lock-out by email too, got %v", err)
+	}
+}
+
+func TestUpdateUsername(t *testing.T) {
+	e := setup(t, nil)
+	ctx := context.Background()
+	a := e.register(t, "a@x.io")
+	b := e.register(t, "b@x.io")
+	u, err := e.a.UpdateProfile(ctx, a.ID, "Ana B", "New.Name")
+	if err != nil || u.Username != "new.name" || u.Name != "Ana B" {
+		t.Fatalf("update: %v %+v", err, u)
+	}
+	if _, err := e.a.UpdateProfile(ctx, a.ID, "Ana", b.Username); err == nil {
+		t.Fatal("taking another user's username must fail")
+	}
+	if u, err = e.a.UpdateProfile(ctx, a.ID, "Only Name", ""); err != nil || u.Username != "new.name" {
+		t.Fatalf("empty username keeps the current one: %v %+v", err, u)
+	}
+	if _, err := e.login("new.name", goodPW); err != nil {
+		t.Fatalf("login with the new username: %v", err)
+	}
+	if _, err := e.login(a.Username, goodPW); !errors.Is(err, domain.ErrInvalidCredentials) {
+		t.Fatalf("the old username must stop working, got %v", err)
+	}
+}
+
+func TestSuggestUsername(t *testing.T) {
+	for in, want := range map[string]string{"John.Doe+tag@x.io": "john.doetag", "a_b@x.io": "a_b", "..x@y": "x"} {
+		if got := domain.SuggestUsername(in); got != want {
+			t.Errorf("SuggestUsername(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

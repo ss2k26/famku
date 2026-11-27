@@ -10,6 +10,7 @@
   import * as Alert from '$lib/components/ui/alert';
 
   let name = $state('');
+  let username = $state('');
   let email = $state('');
   let password = $state('');
   let captchaToken = $state('');
@@ -27,7 +28,7 @@
     fields = {};
     busy = true;
     try {
-      const r = await api<{ verificationRequired: boolean }>('POST', '/api/auth/register', { name, email, password, captcha: captchaToken });
+      const r = await api<{ verificationRequired: boolean }>('POST', '/api/auth/register', { name, username, email, password, captcha: captchaToken });
       done = { verificationRequired: r.verificationRequired };
       password = '';
     } catch (err) {
@@ -57,6 +58,9 @@
       {#if error}<Alert.Root variant="destructive"><Alert.Description>{error}</Alert.Description></Alert.Root>{/if}
       <Field id="name" label="Name" error={fields.name}>
         <Input id="name" autocomplete="name" required maxlength={80} bind:value={name} />
+      </Field>
+      <Field id="username" label="Username" error={fields.username} hint="3-30 characters: letters, numbers, . _ -  You can sign in with it.">
+        <Input id="username" autocomplete="username" autocapitalize="none" spellcheck="false" required minlength={3} maxlength={30} pattern="[A-Za-z0-9][A-Za-z0-9._\-]*[A-Za-z0-9]" bind:value={username} />
       </Field>
       <Field id="email" label="Email" error={fields.email}>
         <Input id="email" type="email" autocomplete="email" required bind:value={email} />

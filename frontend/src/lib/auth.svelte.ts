@@ -3,6 +3,7 @@ import { api, ApiError, setCsrf } from './api';
 export type User = {
   id: string;
   email: string;
+  username: string;
   name: string;
   emailVerified: boolean;
   twoFactorEnabled: boolean;

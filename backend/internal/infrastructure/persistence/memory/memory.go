@@ -44,7 +44,7 @@ func (r Users) Create(_ context.Context, u *domain.User) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, x := range r.users {
-		if x.Email == u.Email {
+		if x.Email == u.Email || x.Username == u.Username {
 			return domain.ErrConflict
 		}
 	}
@@ -72,11 +72,27 @@ func (r Users) ByEmail(_ context.Context, email string) (*domain.User, error) {
 	return nil, domain.ErrNotFound
 }
 
+func (r Users) ByUsername(_ context.Context, username string) (*domain.User, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, u := range r.users {
+		if u.Username == username {
+			return cp(u), nil
+		}
+	}
+	return nil, domain.ErrNotFound
+}
+
 func (r Users) Update(_ context.Context, u *domain.User) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.users[u.ID]; !ok {
 		return domain.ErrNotFound
+	}
+	for _, x := range r.users {
+		if x.ID != u.ID && x.Username == u.Username {
+			return domain.ErrConflict
+		}
 	}
 	r.users[u.ID] = cp(u)
 	return nil
